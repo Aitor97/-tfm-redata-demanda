@@ -95,7 +95,7 @@ def fetch_demanda(
 def json_a_dataframe(data: dict) -> pd.DataFrame:
     """Convierte la respuesta JSON de REData en un DataFrame plano.
 
-    Columnas: timestamp, año, mes, indicador, valor, porcentaje, unidad
+    Columnas: timestamp, anio, mes, indicador, valor, porcentaje, unidad
     """
     frames = []
     for serie in data.get("included", []):
@@ -114,13 +114,13 @@ def json_a_dataframe(data: dict) -> pd.DataFrame:
             "percentage": "porcentaje",
         }, inplace=True)
 
-        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-        df["año"]       = df["timestamp"].dt.year
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True).dt.tz_convert("Europe/Madrid")
+        df["anio"]      = df["timestamp"].dt.year
         df["mes"]       = df["timestamp"].dt.month
         df["indicador"] = titulo
         df["unidad"]    = unidad
 
-        cols = ["timestamp", "año", "mes", "indicador", "valor", "porcentaje", "unidad"]
+        cols = ["timestamp", "anio", "mes", "indicador", "valor", "porcentaje", "unidad"]
         cols = [c for c in cols if c in df.columns]
         frames.append(df[cols])
 
@@ -233,9 +233,11 @@ def descargar_peninsular(
             time.sleep(0.25)
 
         if frames:
+            # keep='last' porque _ventanas solapa el primer dia de cada anio:
+            # la primera aparicion es el mes parcial (1 dia), la segunda es el mes completo.
             resultados[nombre] = (
                 pd.concat(frames, ignore_index=True)
-                .drop_duplicates(["timestamp", "indicador"])
+                .drop_duplicates(["timestamp", "indicador"], keep="last")
                 .sort_values(["indicador", "timestamp"])
                 .reset_index(drop=True)
             )
@@ -248,10 +250,10 @@ def descargar_peninsular(
 # ---------------------------------------------------------------------------
 
 def _prep_excel(df: pd.DataFrame) -> pd.DataFrame:
-    """Convierte timestamps con timezone a naive UTC para compatibilidad Excel."""
+    """Quita el timezone para compatibilidad Excel (ya viene en Europe/Madrid)."""
     df = df.copy()
     for col in df.select_dtypes(include=["datetimetz"]).columns:
-        df[col] = df[col].dt.tz_convert("UTC").dt.tz_localize(None)
+        df[col] = df[col].dt.tz_localize(None)
     return df
 
 
