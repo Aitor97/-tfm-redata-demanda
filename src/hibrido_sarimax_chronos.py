@@ -23,17 +23,17 @@ import warnings
 # Instalacion de dependencias si faltan
 # ---------------------------------------------------------------------------
 
-def _ensure_package(import_name: str, pip_name: str) -> None:
+def _ensure_package(import_name: str, *pip_args: str) -> None:
     try:
         __import__(import_name)
     except ImportError:
-        print(f"[setup] Instalando {pip_name}...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", pip_name, "-q"])
+        print(f"[setup] Instalando {pip_args[0]}...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", *pip_args, "-q"])
 
 _ensure_package("numpy", "numpy")
 _ensure_package("pandas", "pandas")
 _ensure_package("statsmodels", "statsmodels")
-_ensure_package("torch", "torch --index-url https://download.pytorch.org/whl/cpu")
+_ensure_package("torch", "torch")
 _ensure_package("chronos", "chronos-forecasting")
 
 # ---------------------------------------------------------------------------
