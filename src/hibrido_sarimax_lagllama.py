@@ -127,18 +127,37 @@ def predecir_residuos_lagllama(residuos_train: pd.Series, n_pasos: int) -> np.nd
     )
     print(f"[lag-llama] Checkpoint en: {ckpt_path}")
 
+    # PyTorch 2.6+ usa weights_only=True por defecto y rechaza el checkpoint
+    # (contiene clases gluonts no listadas). Forzamos weights_only=False ya
+    # que confiamos en el repo oficial de HuggingFace.
+    _orig_torch_load = torch.load
+    torch.load = lambda *a, **kw: _orig_torch_load(*a, **{**kw, "weights_only": False})
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[lag-llama] Dispositivo: {device}")
 
+    # Leer hiperparametros del checkpoint para construir el estimator con la
+    # misma arquitectura (input_size, n_layer, n_embd_per_head, n_head, ...).
+    ckpt = torch.load(ckpt_path, map_location=device)
+    estimator_args = ckpt["hyper_parameters"]["model_kwargs"]
+
+    # gluonts/pandas Period no acepta "MS"; usamos "M" para el freq del dataset
+    start_period = pd.Period(residuos_train.index[0], freq="M")
     dataset = ListDataset(
-        [{"start": residuos_train.index[0], "target": residuos_train.values}],
-        freq="MS",
+        [{"start": start_period, "target": residuos_train.values}],
+        freq="M",
     )
 
     estimator = LagLlamaEstimator(
         ckpt_path=ckpt_path,
         prediction_length=n_pasos,
         context_length=len(residuos_train),
+        input_size=estimator_args["input_size"],
+        n_layer=estimator_args["n_layer"],
+        n_embd_per_head=estimator_args["n_embd_per_head"],
+        n_head=estimator_args["n_head"],
+        scaling=estimator_args["scaling"],
+        time_feat=estimator_args["time_feat"],
         device=device,
         batch_size=1,
         num_parallel_samples=100,

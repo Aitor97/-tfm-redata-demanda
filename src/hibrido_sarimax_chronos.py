@@ -35,6 +35,7 @@ _ensure_package("pandas", "pandas")
 _ensure_package("statsmodels", "statsmodels")
 _ensure_package("torch", "torch")
 _ensure_package("chronos", "chronos-forecasting")
+_ensure_package("tabulate", "tabulate")
 
 # ---------------------------------------------------------------------------
 # Imports tras instalacion
@@ -118,8 +119,9 @@ def predecir_residuos_chronos(residuos_train: pd.Series, n_pasos: int) -> np.nda
     contexto = torch.tensor(residuos_train.values, dtype=torch.float32).unsqueeze(0)
 
     print(f"[chronos] Prediciendo {n_pasos} pasos de residuos...")
-    quantiles, mean = pipeline.predict(
-        context=contexto,
+    # API actual: predict(inputs, ...) -> tensor (batch, num_samples, prediction_length)
+    forecast = pipeline.predict(
+        contexto,
         prediction_length=n_pasos,
         num_samples=100,
         temperature=1.0,
@@ -127,8 +129,8 @@ def predecir_residuos_chronos(residuos_train: pd.Series, n_pasos: int) -> np.nda
         top_p=1.0,
         limit_prediction_length=False,
     )
-    # mean shape: (1, n_pasos)
-    return mean.squeeze(0).numpy()
+    # forecast shape: (1, num_samples, n_pasos) -> media sobre muestras
+    return forecast.mean(dim=1).squeeze(0).numpy()
 
 
 # ---------------------------------------------------------------------------
