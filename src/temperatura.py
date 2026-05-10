@@ -23,6 +23,7 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 SALIDA = ROOT / "data" / "raw" / "temperatura_peninsular_mensual.csv"
+SALIDA_DIARIA = ROOT / "data" / "raw" / "temperatura_peninsular_diaria.csv"
 
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 
@@ -107,15 +108,35 @@ def agregar_mensual(diaria: pd.DataFrame) -> pd.DataFrame:
     return mensual
 
 
+def serie_diaria(diaria: pd.DataFrame) -> pd.DataFrame:
+    """Devuelve T peninsular diaria con HDD/CDD a nivel diario."""
+    s = diaria.set_index("fecha")["temp_peninsular_C"]
+    out = pd.DataFrame({
+        "temp_media_C": s,
+        "HDD18":        (BASE_HDD - s).clip(lower=0),
+        "CDD22":        (s - BASE_CDD).clip(lower=0),
+    }).round(3).reset_index()
+    return out
+
+
 if __name__ == "__main__":
     print(f"Descargando temperatura diaria de {len(CIUDADES)} ciudades (Open-Meteo Archive)...")
     diaria = temperatura_diaria_peninsular("2015-01-01", "2025-12-31")
     mensual = agregar_mensual(diaria)
+    diaria_pen = serie_diaria(diaria)
 
     SALIDA.parent.mkdir(parents=True, exist_ok=True)
     mensual.to_csv(SALIDA, index=False)
-    print(f"\nGuardado: {SALIDA}")
+    diaria_pen.to_csv(SALIDA_DIARIA, index=False)
+
+    print(f"\nGuardado mensual: {SALIDA}")
     print(f"  {len(mensual)} meses, de {mensual['fecha'].min().date()} a {mensual['fecha'].max().date()}")
     print(mensual.head(3).to_string(index=False))
     print("...")
     print(mensual.tail(3).to_string(index=False))
+
+    print(f"\nGuardado diario: {SALIDA_DIARIA}")
+    print(f"  {len(diaria_pen)} dias, de {diaria_pen['fecha'].min().date()} a {diaria_pen['fecha'].max().date()}")
+    print(diaria_pen.head(3).to_string(index=False))
+    print("...")
+    print(diaria_pen.tail(3).to_string(index=False))

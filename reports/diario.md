@@ -118,3 +118,77 @@ Después del commit `8176697` la sesión continuó en modo exploratorio sin nuev
 5. **Agregar predicciones diarias** a mensual y anual; comparar MAPE rolling expanding contra el baseline mensual (3.65 %).
 6. Alternativa o complemento: **IRE General** como target con SARIMA sin exógenas (la fase 1 que se quedó sin ejecutar).
 7. **Panel CCAA** como tercer capítulo (jerárquica peninsular = suma de 15 CCAAs).
+
+---
+
+## 2026-05-10 — Pipeline diario y comparativa con baseline mensual
+
+### Lo que hice
+
+1. **Descarga de la serie diaria peninsular** (`src/descargar_diaria.py`): 4018 días 2015-01-01..2025-12-31 vía REData (`time_trunc=day`, `geo_limit=peninsular`). Salida `data/processed/demanda_peninsular_diaria.csv`.
+
+2. **Temperatura peninsular diaria** (`src/temperatura.py`): añadida función `serie_diaria` y segundo CSV de salida `data/raw/temperatura_peninsular_diaria.csv` con T media + HDD18 + CDD22 a nivel diario, ponderada por población de las 10 ciudades existentes.
+
+3. **`src/preprocesado_diario.py`** (nuevo): join demanda + temperatura + features de calendario (`dow`, `is_weekend`, `is_holiday` con `holidays.country_holidays("ES")`, `mes`, `doy`). Salida `data/processed/dataset_diario.csv` (4018 × 10 columnas).
+
+4. **`src/modelos_diarios.py`** (nuevo): pipeline rolling expanding con 6 iteraciones (test = año completo 2020..2025). Modelos:
+   - `naive_semanal`: pred(t) = real(t − 364), preserva DOW.
+   - `naive_trend`: naive escalado por crecimiento del último trimestre.
+   - `sarimax_d`: SARIMAX(1,0,1)(1,1,1,7) + HDD18 + CDD22.
+   - `prophet`: Prophet con festivos ES nativos (`add_country_holidays`), regresores HDD/CDD y `is_covid` (lockdown 2020-03-14..2020-06-21).
+   - `lightgbm`: LGBMRegressor con `lag_364`, HDD/CDD/T diarias, dow/mes/doy/sin/cos, `is_holiday`, `is_covid`, rolling-means causales (T7, T30, HDD7, CDD7).
+   - `ensemble`: media de naive_trend + prophet + lightgbm.
+   - `tbats_proper`: opcional vía `--tbats` (Box-Cox + ARMA errors, sólo últimos 3 años de train).
+   Las predicciones diarias se agregan a mensual y anual para comparar con el baseline mensual (rolling expanding 3.65 %, agregado a anual 2.92 %).
+
+### Hallazgos
+
+| Modelo | MAPE mensual | MAPE anual |
+|---|---|---|
+| **ensemble (naive_trend + prophet + lightgbm)** | **2.96 %** ± 1.72 | **2.42 %** ± 1.85 |
+| prophet (con COVID dummy + festivos ES) | 3.37 % ± 1.35 | 3.06 % ± 1.50 |
+| lightgbm | 3.70 % ± 1.87 | 3.27 % ± 2.11 |
+| naive_semanal (lag 364) | 3.97 % ± 1.57 | 2.75 % ± 1.88 |
+| naive_trend | 4.62 % ± 1.40 | 4.11 % ± 1.64 |
+| sarimax_d (1,0,1)(1,1,1,7) | 5.50 % ± 1.62 | 4.97 % ± 1.77 |
+| **baseline SARIMAX mensual** (referencia) | **3.65 % ± 1.66** | **2.92 % ± 1.97** |
+
+- **El ensemble bate al baseline en ambas escalas**: −0.69 pp mensual (~19 % relativo) y −0.50 pp anual (~17 % relativo).
+- **Aporte del COVID dummy**: Prophet pasa de 4.13 % → 3.37 % mensual; el ensemble de 3.20 % → 2.96 %. El estado de alarma marzo-junio 2020 explica la mayor parte del error en 2020.
+- **2020 sigue siendo el año peor** del ensemble (6.17 % mensual). Sin contar 2020 el ensemble queda en 2.31 % mensual.
+- **2024 es el mejor año** del ensemble (1.60 % mensual): año "normal" reciente, sin shocks, con autoconsumo FV ya estabilizado.
+- **TBATS rápido (sin Box-Cox, sin ARMA, en una iteración previa) dio MAPE catastrófico ~30 %**. Excluido del ensemble; la versión `--tbats` opcional con Box-Cox + ARMA queda como follow-up.
+
+### Lecciones metodológicas
+
+- **Trampa de lags cortos en LightGBM**: la versión inicial usaba `lag_7`/`lag_14` calculados sobre `concat(train, test)` y daba 2.06 % mensual — irreal porque el test estaba mirando los últimos 7-14 días verdaderos durante un forecast a 365 días. Eliminados, el modelo cae a 3.70 %, número honesto. Mantengo solo `lag_364`, que está siempre dentro del train por construcción del split.
+- **Las features rolling de temperatura no tienen ese problema**: la T diaria es conocida ex-ante para el horizonte de forecast, así que `temp.shift(1).rolling(N).mean()` es lícito.
+- **Compatibilidad con baseline mensual**: el SARIMAX mensual tiene MAPE anual agregado de 2.92 % (expanding) y 3.29 % (sliding). Necesario calcularlo aparte desde `reports/rolling_predicciones.csv` para que la comparación con los modelos diarios sea apples-to-apples.
+
+### Decisiones / aprendizajes
+
+- **Bajar a frecuencia diaria SÍ aporta** una vez se hace ensemble y se mete intervención COVID. La mejora es modesta pero consistente en todas las ventanas excepto 2020.
+- **Naive semanal puro** es sorprendentemente competitivo (2.75 % anual vs 2.92 % del baseline). Para reportar en TFM, el naive es un baseline de referencia obligatorio.
+- **Prophet brilla en años recientes y estables** (2025: 1.72 % mensual, 2024: 2.86 %), pero en COVID y crisis energética sin dummies se desboca. Con dummy mejora drásticamente.
+- **LightGBM es el motor del ensemble**: aporta complementariedad al naive y prophet por usar features no-lineales (HDD/CDD interactuando con DOW y mes).
+
+### Próximos pasos candidatos
+
+- **Ensemble ponderado** por inverso del MAPE histórico de cada modelo (en lugar de media simple); puede arañar 0.1-0.3 pp.
+- **TBATS proper** (`python src/modelos_diarios.py --tbats`): correr con Box-Cox + ARMA errors y comparar.
+- **Tuning de LightGBM**: grid search sobre `num_leaves`, `learning_rate`, `n_estimators` con CV expanding interno.
+- **Intervención COVID más rica**: en lugar de un dummy binario lockdown, modelar también el "post-lockdown" con efecto que decae (~3 meses) o usar variables de movilidad si hay disponibles.
+- **Modelo jerárquico**: usar las 15 CCAA + reconciliación (MinT/OLS) para predicción peninsular como suma.
+- **Hiperparámetro días/años de train sliding**: probar TBATS y LightGBM con 5 años de sliding en lugar de expanding desde 2015 (igual ayuda a mitigar el cambio de régimen FV).
+
+### Archivos generados / modificados
+
+- `src/temperatura.py` (modificado: nueva función `serie_diaria`, segundo CSV de salida).
+- `src/descargar_diaria.py` (nuevo).
+- `src/preprocesado_diario.py` (nuevo).
+- `src/modelos_diarios.py` (nuevo).
+- `data/processed/demanda_peninsular_diaria.csv` (nuevo).
+- `data/raw/temperatura_peninsular_diaria.csv` (nuevo).
+- `data/processed/dataset_diario.csv` (nuevo).
+- `reports/diario_predicciones.csv` (nuevo).
+- `reports/diario_resumen.md` (nuevo).
