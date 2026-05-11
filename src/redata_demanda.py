@@ -6,6 +6,7 @@ Documentacion: https://apidatos.ree.es/
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Literal
 import time
 
@@ -142,7 +143,13 @@ def _ventanas(start_date: str, end_date: str, chunk_years: int) -> list[tuple[st
             fin,
         )
         result.append((cursor.strftime("%Y-%m-%dT%H:%M"), cursor_fin.strftime("%Y-%m-%dT%H:%M")))
-        cursor = (cursor_fin.replace(hour=0, minute=0) + timedelta(days=1)).replace(day=1)
+        # Advance to first of month containing cursor_fin; if that would not
+        # advance cursor (end_date lands mid-month), jump to the next month.
+        new_cursor = (cursor_fin.replace(hour=0, minute=0) + timedelta(days=1)).replace(day=1)
+        if new_cursor <= cursor:
+            m, y = cursor_fin.month, cursor_fin.year
+            new_cursor = datetime(y + 1, 1, 1) if m == 12 else datetime(y, m + 1, 1)
+        cursor = new_cursor
     return result
 
 
@@ -271,54 +278,97 @@ def guardar_excel(hojas: dict[str, pd.DataFrame], ruta: str) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
+def _max_timestamp(df: pd.DataFrame) -> str | None:
+    """Returns the next start date (day after max timestamp) as 'YYYY-MM-DDT00:00'."""
+    if df.empty or "timestamp" not in df.columns:
+        return None
+    ts = pd.to_datetime(df["timestamp"]).max()
+    if pd.isna(ts):
+        return None
+    next_day = ts.normalize() + timedelta(days=1)
+    return next_day.strftime("%Y-%m-%dT00:00")
+
+
+def _merge(existing: pd.DataFrame, new: pd.DataFrame, dedup_cols: list[str]) -> pd.DataFrame:
+    """Concatenates existing and new data, dropping duplicates on dedup_cols."""
+    combined = pd.concat([existing, new], ignore_index=True)
+    return combined.drop_duplicates(subset=dedup_cols, keep="last").sort_values("timestamp").reset_index(drop=True)
+
+
 if __name__ == "__main__":
-    print("=== REData - Demanda electrica ===\n")
+    print("=== REData - Demanda electrica (actualizacion incremental) ===\n")
+
+    end_date = datetime.now().strftime("%Y-%m-%dT%H:%M")
+    print(f"Fecha fin: {end_date}\n")
+
+    ROOT = Path(__file__).resolve().parents[1]
+    SALIDA = str(ROOT / "data" / "raw" / "demanda_REData.xlsx")
+
+    # Load existing Excel data
+    existing: dict[str, pd.DataFrame] = {}
+    try:
+        xl = pd.ExcelFile(SALIDA)
+        for sheet in xl.sheet_names:
+            df = xl.parse(sheet)
+            if "timestamp" in df.columns:
+                df["timestamp"] = pd.to_datetime(df["timestamp"])
+            existing[sheet] = df
+        print(f"Cargado existente: {SALIDA} ({len(existing)} hojas)\n")
+    except FileNotFoundError:
+        print("No existe archivo previo. Descarga completa.\n")
 
     hojas: dict[str, pd.DataFrame] = {}
 
-    # --- CCAA ---
-    print("Descargando demanda mensual por CCAA (2020-2024)...")
-    df_mes = descargar_ccaa(
-        start_date="2020-01-01T00:00",
-        end_date="2024-12-31T23:59",
-        time_trunc="month",
-    )
-    if not df_mes.empty:
-        hojas["CCAA_Mensual"] = df_mes
+    # --- CCAA Mensual ---
+    ex_mes = existing.get("CCAA_Mensual", pd.DataFrame())
+    start_mes = _max_timestamp(ex_mes) or "2020-01-01T00:00"
+    print(f"Descargando demanda mensual por CCAA ({start_mes} -> {end_date})...")
+    df_mes_new = descargar_ccaa(start_date=start_mes, end_date=end_date, time_trunc="month")
+    if not df_mes_new.empty:
+        hojas["CCAA_Mensual"] = _merge(ex_mes, df_mes_new, ["timestamp", "geo_id"])
+    elif not ex_mes.empty:
+        hojas["CCAA_Mensual"] = ex_mes
+        print("  Sin datos nuevos; conservando existentes.")
 
     print()
-    print("Descargando demanda anual por CCAA (2015-2024)...")
-    df_anio = descargar_ccaa(
-        start_date="2015-01-01T00:00",
-        end_date="2024-12-31T23:59",
-        time_trunc="year",
-    )
-    if not df_anio.empty:
-        hojas["CCAA_Anual"] = df_anio
+    # --- CCAA Anual ---
+    ex_anio = existing.get("CCAA_Anual", pd.DataFrame())
+    start_anio = _max_timestamp(ex_anio) or "2015-01-01T00:00"
+    print(f"Descargando demanda anual por CCAA ({start_anio} -> {end_date})...")
+    df_anio_new = descargar_ccaa(start_date=start_anio, end_date=end_date, time_trunc="year")
+    if not df_anio_new.empty:
+        hojas["CCAA_Anual"] = _merge(ex_anio, df_anio_new, ["timestamp", "geo_id"])
+    elif not ex_anio.empty:
+        hojas["CCAA_Anual"] = ex_anio
+        print("  Sin datos nuevos; conservando existentes.")
 
+    print()
     # --- Series peninsulares mensuales ---
-    print()
-    print("Descargando series peninsulares mensuales (2015-2024)...")
-    pen_mes = descargar_peninsular(
-        start_date="2015-01-01T00:00",
-        end_date="2024-12-31T23:59",
-        time_trunc="month",
-    )
-    for nombre, df in pen_mes.items():
-        hojas[f"Pen_{nombre[:24]}"] = df
+    ex_pen_sample = existing.get("Pen_Demanda peninsular", pd.DataFrame())
+    start_pen_mes = _max_timestamp(ex_pen_sample) or "2015-01-01T00:00"
+    print(f"Descargando series peninsulares mensuales ({start_pen_mes} -> {end_date})...")
+    pen_mes = descargar_peninsular(start_date=start_pen_mes, end_date=end_date, time_trunc="month")
+    for nombre, df_new in pen_mes.items():
+        key = f"Pen_{nombre[:24]}"
+        ex = existing.get(key, pd.DataFrame())
+        hojas[key] = _merge(ex, df_new, ["timestamp", "indicador"]) if not df_new.empty else ex
+    for key in [k for k in existing if k.startswith("Pen_") and k not in hojas]:
+        hojas[key] = existing[key]
 
-    # --- Series peninsulares anuales ---
     print()
-    print("Descargando series peninsulares anuales (2015-2024)...")
-    pen_anio = descargar_peninsular(
-        start_date="2015-01-01T00:00",
-        end_date="2024-12-31T23:59",
-        time_trunc="year",
-    )
-    for nombre, df in pen_anio.items():
-        hojas[f"PenAnual_{nombre[:19]}"] = df
+    # --- Series peninsulares anuales ---
+    ex_pen_an_sample = existing.get("PenAnual_Demanda peninsular", pd.DataFrame())
+    start_pen_anio = _max_timestamp(ex_pen_an_sample) or "2015-01-01T00:00"
+    print(f"Descargando series peninsulares anuales ({start_pen_anio} -> {end_date})...")
+    pen_anio = descargar_peninsular(start_date=start_pen_anio, end_date=end_date, time_trunc="year")
+    for nombre, df_new in pen_anio.items():
+        key = f"PenAnual_{nombre[:19]}"
+        ex = existing.get(key, pd.DataFrame())
+        hojas[key] = _merge(ex, df_new, ["timestamp", "indicador"]) if not df_new.empty else ex
+    for key in [k for k in existing if k.startswith("PenAnual_") and k not in hojas]:
+        hojas[key] = existing[key]
 
     # --- Guardar todo en un Excel ---
     print()
-    guardar_excel(hojas, "demanda_REData.xlsx")
+    guardar_excel(hojas, SALIDA)
     print("Listo.")
