@@ -15,6 +15,7 @@ para clima mediterraneo continental.
 Salida: data/raw/temperatura_peninsular_mensual.csv
 """
 
+from datetime import date
 from pathlib import Path
 import time
 import requests
@@ -108,8 +109,10 @@ def agregar_mensual(diaria: pd.DataFrame) -> pd.DataFrame:
 
 
 if __name__ == "__main__":
+    _hoy = date.today()
+    _fin = f"{_hoy.year}-{_hoy.month:02d}-01"
     print(f"Descargando temperatura diaria de {len(CIUDADES)} ciudades (Open-Meteo Archive)...")
-    diaria = temperatura_diaria_peninsular("2015-01-01", "2025-12-31")
+    diaria = temperatura_diaria_peninsular("2015-01-01", _fin)
     mensual = agregar_mensual(diaria)
 
     SALIDA.parent.mkdir(parents=True, exist_ok=True)

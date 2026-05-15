@@ -6,6 +6,7 @@ Salida: data/raw/demanda_peninsular_mensual.csv
 Columnas: fecha (YYYY-MM-01), demanda_MWh
 """
 
+from datetime import date
 from pathlib import Path
 import pandas as pd
 
@@ -15,8 +16,11 @@ from redata_demanda import descargar_peninsular
 ROOT = Path(__file__).resolve().parents[1]
 SALIDA = ROOT / "data" / "raw" / "demanda_peninsular_mensual.csv"
 
+_HOY = date.today()
+_FIN_DEFAULT = f"{_HOY.year}-{_HOY.month:02d}-01T00:00"
 
-def extraer(start: str = "2015-01-01T00:00", end: str = "2025-12-31T23:59") -> pd.DataFrame:
+
+def extraer(start: str = "2015-01-01T00:00", end: str = _FIN_DEFAULT) -> pd.DataFrame:
     series = descargar_peninsular(start_date=start, end_date=end, time_trunc="month")
 
     df = series.get("Demanda peninsular")
@@ -36,7 +40,7 @@ def extraer(start: str = "2015-01-01T00:00", end: str = "2025-12-31T23:59") -> p
 
 
 if __name__ == "__main__":
-    print("Descargando demanda mensual peninsular 2015-2025 desde REData...")
+    print(f"Descargando demanda mensual peninsular 2015-{_HOY.year} desde REData...")
     df = extraer()
     SALIDA.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(SALIDA, index=False)
