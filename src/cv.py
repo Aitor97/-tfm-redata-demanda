@@ -1,21 +1,25 @@
 """
 Walk-forward cross-validation y metricas de evaluacion.
+
+Granularidad: datos diarios.
+  - horizon: numero de dias a predecir (defecto 365 = un anio)
+  - fold_starts: fechas de inicio del periodo de test (formato 'YYYY-MM-DD')
 """
 
 import numpy as np
 import pandas as pd
 
 
-def folds_walk_forward(df: pd.DataFrame, fold_starts: list, horizon: int = 12):
+def folds_walk_forward(df: pd.DataFrame, fold_starts: list, horizon: int = 365):
     """Genera (train, test, etiqueta) por cada fecha de inicio de test.
 
-    Ventana expansiva: train = todo lo anterior; test = `horizon` meses desde
-    `fold_start`. Si no hay suficientes meses para el test, se omite el fold.
+    Ventana expansiva: train = todo lo anterior; test = `horizon` dias desde
+    `fold_start`. Si no hay suficientes dias para el test, se omite el fold.
     """
     for start in fold_starts:
         start = pd.Timestamp(start)
-        end_train = start - pd.offsets.MonthBegin(1)
-        end_test  = start + pd.offsets.MonthBegin(horizon - 1)
+        end_train = start - pd.offsets.Day(1)
+        end_test  = start + pd.offsets.Day(horizon - 1)
         train = df.loc[:end_train]
         test  = df.loc[start:end_test]
         if len(test) < horizon:
@@ -24,7 +28,7 @@ def folds_walk_forward(df: pd.DataFrame, fold_starts: list, horizon: int = 12):
 
 
 def metricas(y_true, y_pred) -> dict:
-    """MAE, RMSE, MAPE a nivel mensual + error de la suma anual (en %)."""
+    """MAE, RMSE, MAPE a nivel diario + error de la suma del periodo (en %)."""
     y_true = np.asarray(y_true, dtype=float)
     y_pred = np.asarray(y_pred, dtype=float)
     err    = y_true - y_pred

@@ -4,6 +4,10 @@ Analisis de autocorrelacion de residuos SARIMA/SARIMAX.
 Test de Ljung-Box para decidir si un enfoque hibrido con foundation models
 (Chronos/TimesFM) puede aportar mejora al modelo SARIMAX ganador.
 
+Granularidad: datos diarios.
+  - Estacionalidad semanal: m=7
+  - Lags de Ljung-Box: 7, 14, 30 dias (1, 2 semanas y ~1 mes)
+
 Uso:
     python src/analisis_residuos.py
 
@@ -29,25 +33,25 @@ sys.path.insert(0, SRC_DIR)
 # Configuracion
 # ---------------------------------------------------------------------------
 
-DATOS = os.path.join(ROOT_DIR, "data", "processed", "dataset_mensual.csv")
+DATOS = os.path.join(ROOT_DIR, "data", "processed", "dataset_diario.csv")
 REPORTS_DIR = os.path.join(ROOT_DIR, "reports")
 
 ORDER = (0, 1, 2)
-SEASONAL_ORDER = (1, 1, 1, 12)
+SEASONAL_ORDER = (1, 1, 1, 7)   # estacionalidad semanal para datos diarios
 EXOG_COLS = ["HDD18", "CDD22"]
 
 TRAIN_INI = "2015-01-01"
-TRAIN_FIN = "2023-12-01"
+TRAIN_FIN = "2023-12-31"
 
 # Train-end de cada fold CV (el test es el año siguiente, no se usa aqui)
 FOLDS = {
-    "fold_2019": "2019-12-01",
-    "fold_2020": "2020-12-01",
-    "fold_2021": "2021-12-01",
-    "fold_2022": "2022-12-01",
+    "fold_2019": "2019-12-31",
+    "fold_2020": "2020-12-31",
+    "fold_2021": "2021-12-31",
+    "fold_2022": "2022-12-31",
 }
 
-LAGS = [12, 24, 36]
+LAGS = [7, 14, 30]   # 1 semana, 2 semanas, ~1 mes
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +60,7 @@ LAGS = [12, 24, 36]
 
 def cargar_datos() -> pd.DataFrame:
     df = pd.read_csv(DATOS, parse_dates=["fecha"], index_col="fecha")
-    df = df.asfreq("MS")
+    df = df.asfreq("D")
     return df
 
 
@@ -98,20 +102,21 @@ def main():
 
     mask_full = (df.index >= TRAIN_INI) & (df.index <= TRAIN_FIN)
     demanda_media = float(df.loc[mask_full, "demanda_MWh"].mean())
+    n_dias_full = int(mask_full.sum())
 
     resultados: dict[str, dict] = {}
 
     # -----------------------------------------------------------------------
-    # Train completo (pre-holdout): 2015-01 a 2023-12
+    # Train completo (pre-holdout): 2015-01-01 a 2023-12-31
     # -----------------------------------------------------------------------
     y_full = df.loc[mask_full, "demanda_MWh"]
     exog_full = df.loc[mask_full, EXOG_COLS]
 
-    print("Ajustando SARIMA  (train completo, 108 meses)...")
+    print(f"Ajustando SARIMA  (train completo, {n_dias_full} dias)...")
     fit_sarima = ajustar_modelo(y_full, exog=None)
     resid_sarima = fit_sarima.resid
 
-    print("Ajustando SARIMAX (train completo, 108 meses)...")
+    print(f"Ajustando SARIMAX (train completo, {n_dias_full} dias)...")
     fit_sarimax = ajustar_modelo(y_full, exog=exog_full)
     resid_sarimax = fit_sarimax.resid
 
@@ -128,9 +133,9 @@ def main():
         mask_fold = (df.index >= TRAIN_INI) & (df.index <= fin)
         y_fold = df.loc[mask_fold, "demanda_MWh"]
         exog_fold = df.loc[mask_fold, EXOG_COLS]
-        n_meses = mask_fold.sum()
+        n_dias = mask_fold.sum()
 
-        print(f"\nFold {fold_nombre} (hasta {fin[:7]}, {n_meses} meses):")
+        print(f"\nFold {fold_nombre} (hasta {fin[:10]}, {n_dias} dias):")
 
         print(f"  Ajustando SARIMA...")
         fit_s = ajustar_modelo(y_fold, exog=None)
@@ -164,7 +169,7 @@ def main():
     # -----------------------------------------------------------------------
     # Reporte Markdown
     # -----------------------------------------------------------------------
-    generar_reporte(resultados, demanda_media)
+    generar_reporte(resultados, demanda_media, n_dias_full)
     md_path = os.path.join(REPORTS_DIR, "ljungbox.md")
     print(f"Reporte Markdown guardado: {md_path}")
 
@@ -173,7 +178,7 @@ def main():
 # Generacion del reporte
 # ---------------------------------------------------------------------------
 
-def generar_reporte(resultados: dict, demanda_media: float):
+def generar_reporte(resultados: dict, demanda_media: float, n_dias_full: int):
 
     # Recopilar todos los p-values para el veredicto global
     todos_pvalues = [
@@ -192,8 +197,8 @@ def generar_reporte(resultados: dict, demanda_media: float):
     # ------------------------------------------------------------------
     # Tabla p-values
     # ------------------------------------------------------------------
-    cab = "| Configuracion | lag=12 | lag=24 | lag=36 |"
-    sep = "|---------------|--------|--------|--------|"
+    cab = "| Configuracion | lag=7 | lag=14 | lag=30 |"
+    sep = "|---------------|-------|--------|--------|"
     filas_pv = [cab, sep]
     for config, vals in resultados.items():
         fila = f"| {config} |"
@@ -239,8 +244,8 @@ def generar_reporte(resultados: dict, demanda_media: float):
             "**No procede implementar el enfoque hibrido SARIMAX+Chronos/TimesFM.** "
             "Los residuos son ruido blanco y la ganancia esperada sobre el MAPE es nula "
             "o marginal. Se recomienda cerrar el TFM con el SARIMAX como modelo final "
-            "(MAPE 1.96% en hold-out 2024-2025) y dedicar el esfuerzo restante a la "
-            "documentacion del pipeline y la redaccion de la memoria."
+            "y dedicar el esfuerzo restante a la documentacion del pipeline y la "
+            "redaccion de la memoria."
         )
     else:
         lista_casos = "\n".join(f"- {c}" for c in casos_significativos)
@@ -249,7 +254,7 @@ def generar_reporte(resultados: dict, demanda_media: float):
             f"residual estadisticamente significativa: el SARIMAX no ha capturado toda "
             f"la estructura de la serie. Casos significativos:\n\n{lista_casos}\n\n"
             f"La desviacion estandar de los residuos del SARIMAX es "
-            f"{std_sarimax_mwh:,.0f} MWh ({std_sarimax_pct:.2f}% de la demanda media). "
+            f"{std_sarimax_mwh:,.0f} MWh ({std_sarimax_pct:.2f}% de la demanda media diaria). "
             f"Esa magnitud representa el techo teorico de mejora absoluta disponible para "
             f"el componente corrector del hibrido."
         )
@@ -260,7 +265,7 @@ def generar_reporte(resultados: dict, demanda_media: float):
             f"es: (1) generar predicciones del SARIMAX para el hold-out 2024-2025, "
             f"(2) entrenar Chronos/TimesFM sobre los residuos in-sample del train completo "
             f"(fichero `reports/residuos_sarimax.csv`), (3) combinar ambas predicciones "
-            f"y comparar MAPE con la linea base del 1.96%. La reduccion maxima alcanzable "
+            f"y comparar MAPE con la linea base. La reduccion maxima alcanzable "
             f"equivale a capturar parte de los {std_sarimax_mwh:,.0f} MWh de desviacion "
             f"estandar residual."
         )
@@ -282,7 +287,7 @@ def generar_reporte(resultados: dict, demanda_media: float):
 
     reporte = f"""# Analisis de Autocorrelacion de Residuos SARIMA/SARIMAX
 
-**TFM**: Prediccion de demanda electrica peninsular (REData, mensual)
+**TFM**: Prediccion de demanda electrica peninsular (REData, diaria)
 **Fecha de analisis**: Mayo 2026
 **Objetivo**: Determinar si los residuos del modelo SARIMAX ganador contienen
 estructura autocorrelada aprovechable por un enfoque hibrido con foundation models
@@ -295,17 +300,16 @@ estructura autocorrelada aprovechable por un enfoque hibrido con foundation mode
 | Parametro | Valor |
 |-----------|-------|
 | order (p,d,q) | (0, 1, 2) |
-| seasonal_order (P,D,Q,m) | (1, 1, 1, 12) |
-| Frecuencia | Mensual (MS) |
-| Train pre-holdout | 2015-01 a 2023-12 (108 meses) |
-| Hold-out (no usado en este analisis) | 2024-01 a 2025-12 (24 meses) |
+| seasonal_order (P,D,Q,m) | (1, 1, 1, 7) |
+| Frecuencia | Diaria (D) |
+| Train pre-holdout | 2015-01-01 a 2023-12-31 ({n_dias_full} dias) |
+| Hold-out (no usado en este analisis) | 2024-01-01 a 2025-12-31 |
 | Variables exogenas SARIMAX | HDD18, CDD22 |
-| MAPE hold-out SARIMAX (referencia) | 1.96% |
 
 Los modelos se ajustan con `statsmodels.tsa.statespace.SARIMAX` sobre el train
 pre-holdout completo y sobre cuatro folds de validacion cruzada walk-forward
-(train terminando en 2019-12, 2020-12, 2021-12 y 2022-12) para verificar la
-robustez del resultado.
+(train terminando en 2019-12-31, 2020-12-31, 2021-12-31 y 2022-12-31) para
+verificar la robustez del resultado.
 
 ---
 
@@ -313,8 +317,8 @@ robustez del resultado.
 
 Los residuos analizados son los errores de prediccion un paso adelante
 (one-step-ahead) del filtro de Kalman (`model.resid` de statsmodels). El test
-Q de Ljung-Box se aplica en los lags 12, 24 y 36, equivalentes a 1, 2 y 3
-ciclos anuales completos.
+Q de Ljung-Box se aplica en los lags 7, 14 y 30 dias, equivalentes a 1 semana,
+2 semanas y aproximadamente 1 mes.
 
 **Negrita** = p < 0.05 (rechazo de H0; autocorrelacion significativa al 5%).
 
@@ -326,7 +330,7 @@ ciclos anuales completos.
 
 {tabla_st}
 
-Demanda media mensual (train 2015-2023): {demanda_media:,.0f} MWh
+Demanda media diaria (train 2015-2023): {demanda_media:,.0f} MWh
 
 ---
 
@@ -348,7 +352,7 @@ Demanda media mensual (train 2015-2023): {demanda_media:,.0f} MWh
   prediccion multi-paso. Son la magnitud correcta para diagnosticar si el modelo
   ha absorbido toda la dinamica lineal de la serie.
 - El test de Ljung-Box se implementa con `acorr_ljungbox` de statsmodels con
-  `return_df=True`. Los lags 12, 24 y 36 cubren hasta 3 ciclos estacionales.
+  `return_df=True`. Los lags 7, 14 y 30 cubren patrones semanales y mensuales.
 - Los folds CV se usan exclusivamente para comprobar que el patron de
   autocorrelacion (o su ausencia) no es un artefacto del periodo concreto de
   entrenamiento.

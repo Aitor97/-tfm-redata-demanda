@@ -1,8 +1,8 @@
 """
-Une la serie mensual de demanda peninsular con la temperatura ponderada
+Une la serie diaria de demanda peninsular con la temperatura ponderada
 y guarda el dataset definitivo para el pipeline de modelado.
 
-Salida: data/processed/dataset_mensual.csv
+Salida: data/processed/dataset_diario.csv
 Columnas: fecha, demanda_MWh, temp_media_C, HDD18, CDD22
 """
 
@@ -11,9 +11,9 @@ import pandas as pd
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEM  = ROOT / "data" / "raw" / "demanda_peninsular_mensual.csv"
-TEMP = ROOT / "data" / "raw" / "temperatura_peninsular_mensual.csv"
-OUT  = ROOT / "data" / "processed" / "dataset_mensual.csv"
+DEM  = ROOT / "data" / "raw" / "demanda_peninsular_diaria.csv"
+TEMP = ROOT / "data" / "raw" / "temperatura_peninsular_diaria.csv"
+OUT  = ROOT / "data" / "processed" / "dataset_diario.csv"
 
 
 def construir() -> pd.DataFrame:
@@ -28,10 +28,10 @@ def construir() -> pd.DataFrame:
     if df[["temp_media_C", "HDD18", "CDD22"]].isna().any().any():
         raise ValueError("Hay valores nulos en variables de temperatura.")
 
-    fechas_esperadas = pd.date_range(df["fecha"].min(), df["fecha"].max(), freq="MS")
+    fechas_esperadas = pd.date_range(df["fecha"].min(), df["fecha"].max(), freq="D")
     if len(fechas_esperadas) != len(df):
         faltan = sorted(set(fechas_esperadas) - set(df["fecha"]))
-        raise ValueError(f"Serie con huecos. Faltan {len(faltan)} meses: {faltan[:5]}...")
+        raise ValueError(f"Serie con huecos. Faltan {len(faltan)} dias: {faltan[:5]}...")
 
     return df
 
@@ -41,7 +41,7 @@ if __name__ == "__main__":
     OUT.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(OUT, index=False)
     print(f"Guardado: {OUT}")
-    print(f"  {len(df)} meses, de {df['fecha'].min().date()} a {df['fecha'].max().date()}")
+    print(f"  {len(df)} dias, de {df['fecha'].min().date()} a {df['fecha'].max().date()}")
     print()
     print(df.describe().round(2).to_string())
     print()

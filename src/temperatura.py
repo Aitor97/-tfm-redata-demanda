@@ -4,15 +4,15 @@ Temperatura peninsular de Espana ponderada por poblacion (Open-Meteo Archive).
 Para cada ciudad representativa se descarga la temperatura media diaria
 (2015-2025) desde la ERA5 reanalysis via Open-Meteo Archive API (gratis,
 sin API key). Se calcula una temperatura peninsular ponderada por
-poblacion y, mensualmente:
-    - temp_media_C  (media simple de los dias del mes)
-    - HDD18         (sum de max(0, 18 - T_dia))
-    - CDD22         (sum de max(0, T_dia - 22))
+poblacion y, para cada dia:
+    - temp_media_C  (temperatura media diaria ponderada)
+    - HDD18         (max(0, 18 - T_dia))
+    - CDD22         (max(0, T_dia - 22))
 
 Las bases 18 / 22 son las habituales en literatura de demanda electrica
 para clima mediterraneo continental.
 
-Salida: data/raw/temperatura_peninsular_mensual.csv
+Salida: data/raw/temperatura_peninsular_diaria.csv
 """
 
 from pathlib import Path
@@ -22,7 +22,7 @@ import pandas as pd
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SALIDA = ROOT / "data" / "raw" / "temperatura_peninsular_mensual.csv"
+SALIDA = ROOT / "data" / "raw" / "temperatura_peninsular_diaria.csv"
 
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 
@@ -89,33 +89,31 @@ def temperatura_diaria_peninsular(start: str, end: str) -> pd.DataFrame:
     return matriz.reset_index()
 
 
-def agregar_mensual(diaria: pd.DataFrame) -> pd.DataFrame:
+def preparar_diaria(diaria: pd.DataFrame) -> pd.DataFrame:
+    """Calcula HDD18 y CDD22 diarios a partir de la temperatura ponderada."""
     s = diaria.set_index("fecha")["temp_peninsular_C"]
     hdd = (BASE_HDD - s).clip(lower=0)
     cdd = (s - BASE_CDD).clip(lower=0)
 
-    mensual = pd.DataFrame({
-        "temp_media_C": s,
-        "HDD18":        hdd,
-        "CDD22":        cdd,
-    }).resample("MS").agg({
-        "temp_media_C": "mean",
-        "HDD18":        "sum",
-        "CDD22":        "sum",
-    })
-    mensual = mensual.round(3).reset_index().rename(columns={"fecha": "fecha"})
-    return mensual
+    df_diaria = pd.DataFrame({
+        "fecha":       s.index,
+        "temp_media_C": s.values,
+        "HDD18":        hdd.values,
+        "CDD22":        cdd.values,
+    }).reset_index(drop=True)
+
+    return df_diaria.round(3)
 
 
 if __name__ == "__main__":
     print(f"Descargando temperatura diaria de {len(CIUDADES)} ciudades (Open-Meteo Archive)...")
     diaria = temperatura_diaria_peninsular("2015-01-01", "2025-12-31")
-    mensual = agregar_mensual(diaria)
+    df_out = preparar_diaria(diaria)
 
     SALIDA.parent.mkdir(parents=True, exist_ok=True)
-    mensual.to_csv(SALIDA, index=False)
+    df_out.to_csv(SALIDA, index=False)
     print(f"\nGuardado: {SALIDA}")
-    print(f"  {len(mensual)} meses, de {mensual['fecha'].min().date()} a {mensual['fecha'].max().date()}")
-    print(mensual.head(3).to_string(index=False))
+    print(f"  {len(df_out)} dias, de {df_out['fecha'].min().date()} a {df_out['fecha'].max().date()}")
+    print(df_out.head(3).to_string(index=False))
     print("...")
-    print(mensual.tail(3).to_string(index=False))
+    print(df_out.tail(3).to_string(index=False))

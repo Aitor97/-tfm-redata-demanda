@@ -3,6 +3,11 @@ Funciones de prediccion: SARIMA(X), ETS, Prophet.
 
 Cada funcion ajusta sobre `y_train` y devuelve una pd.Series de predicciones
 indexada por `y_test_index`.
+
+Granularidad: datos diarios.
+  - SARIMA/SARIMAX: estacionalidad semanal (m=7)
+  - ETS: estacionalidad semanal (seasonal_periods=7)
+  - Prophet: estacionalidad semanal + anual automatica
 """
 
 import warnings
@@ -28,7 +33,7 @@ def predecir_sarima(
     y_train: pd.Series,
     y_test_index: pd.Index,
     order=(1, 1, 1),
-    seasonal_order=(1, 1, 1, 12),
+    seasonal_order=(1, 1, 1, 7),
     exog_train: pd.DataFrame | None = None,
     exog_test:  pd.DataFrame | None = None,
 ) -> pd.Series:
@@ -54,9 +59,12 @@ def buscar_orden_sarima(
     q_range=(0, 1, 2),
     P_range=(0, 1),
     Q_range=(0, 1),
-    d=1, D=1, m=12,
+    d=1, D=1, m=7,
 ) -> tuple[tuple, tuple, float]:
-    """Selecciona (order, seasonal_order) por menor AIC en una grid pequena."""
+    """Selecciona (order, seasonal_order) por menor AIC en una grid pequena.
+
+    m=7 captura la estacionalidad semanal de los datos diarios.
+    """
     mejor = (None, None, np.inf)
     for p, q, P, Q in product(p_range, q_range, P_range, Q_range):
         order = (p, d, q)
@@ -96,7 +104,7 @@ def predecir_ets(
             y_train,
             trend=trend,
             seasonal=seasonal,
-            seasonal_periods=12,
+            seasonal_periods=7,
             damped_trend=damped_trend,
             initialization_method="estimated",
         ).fit()
@@ -106,7 +114,10 @@ def predecir_ets(
 
 
 def buscar_config_ets(y_train: pd.Series) -> tuple[dict, float]:
-    """Selecciona (trend, seasonal, damped_trend) por menor AIC."""
+    """Selecciona (trend, seasonal, damped_trend) por menor AIC.
+
+    seasonal_periods=7 captura la estacionalidad semanal de los datos diarios.
+    """
     mejor_cfg, mejor_aic = None, np.inf
     for trend, seasonal, damped in product(["add", "mul", None], ["add", "mul"], [False, True]):
         if trend is None and damped:
@@ -118,7 +129,7 @@ def buscar_config_ets(y_train: pd.Series) -> tuple[dict, float]:
                     y_train,
                     trend=trend,
                     seasonal=seasonal,
-                    seasonal_periods=12,
+                    seasonal_periods=7,
                     damped_trend=damped,
                     initialization_method="estimated",
                 ).fit()
@@ -151,7 +162,7 @@ def predecir_prophet(
 
     m = Prophet(
         yearly_seasonality=True,
-        weekly_seasonality=False,
+        weekly_seasonality=True,   # activado para datos diarios (patron dia de semana)
         daily_seasonality=False,
         seasonality_mode=seasonality_mode,
     )
