@@ -3,3 +3,10 @@ __pycache__/
 .env
 .claude/
 .ipynb_checkpoints/
+
+# Datos crudos pesados (>100 MB no admitidos por GitHub)
+data/raw/opsd_time_series_60min.csv.csv
+
+# Logs de ejecucion (no aportan al historial)
+reports/*_log_*.txt
+reports/*_log.txt

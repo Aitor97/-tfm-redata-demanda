@@ -151,13 +151,14 @@ Después del commit `8176697` la sesión continuó en modo exploratorio sin nuev
 | naive_semanal (lag 364) | 3.97 % ± 1.57 | 2.75 % ± 1.88 |
 | naive_trend | 4.62 % ± 1.40 | 4.11 % ± 1.64 |
 | sarimax_d (1,0,1)(1,1,1,7) | 5.50 % ± 1.62 | 4.97 % ± 1.77 |
+| tbats_proper [7, 365.25] + Box-Cox + ARMA (3 años train) | 9.23 % ± 3.78 | 8.18 % ± 5.24 |
 | **baseline SARIMAX mensual** (referencia) | **3.65 % ± 1.66** | **2.92 % ± 1.97** |
 
 - **El ensemble bate al baseline en ambas escalas**: −0.69 pp mensual (~19 % relativo) y −0.50 pp anual (~17 % relativo).
 - **Aporte del COVID dummy**: Prophet pasa de 4.13 % → 3.37 % mensual; el ensemble de 3.20 % → 2.96 %. El estado de alarma marzo-junio 2020 explica la mayor parte del error en 2020.
 - **2020 sigue siendo el año peor** del ensemble (6.17 % mensual). Sin contar 2020 el ensemble queda en 2.31 % mensual.
 - **2024 es el mejor año** del ensemble (1.60 % mensual): año "normal" reciente, sin shocks, con autoconsumo FV ya estabilizado.
-- **TBATS rápido (sin Box-Cox, sin ARMA, en una iteración previa) dio MAPE catastrófico ~30 %**. Excluido del ensemble; la versión `--tbats` opcional con Box-Cox + ARMA queda como follow-up.
+- **TBATS descartado definitivamente (ejecutado en rolling 6 ventanas)**. La versión rápida previa (sin Box-Cox/ARMA) dio ~30 %. La versión *proper* `--tbats` (doble estacionalidad [7, 365.25] + Box-Cox + ARMA errors) se corrió el 2026-05-18: **9.23 % mensual / 8.18 % anual**, con diferencia el peor modelo (vs ensemble 2.96 % / 2.42 %, vs sarimax_d 5.50 % / 4.97 %) y además el más lento (~100–220 s por ventana, ~13 min total frente a segundos del resto). Empeora en los años de cambio de régimen (2022: 14.71 %, 2023: 12.47 %). **No entra en el ensemble.** Caveat metodológico: TBATS entrena solo sobre los **últimos ~3 años** (`train.iloc[-365*3:]`), no expanding desde 2015 como el resto; dado el resultado catastrófico, alinear la ventana no cambiaría la conclusión (la familia TBATS queda cubierta conceptualmente y descartada empíricamente).
 
 ### Lecciones metodológicas
 
@@ -175,11 +176,11 @@ Después del commit `8176697` la sesión continuó en modo exploratorio sin nuev
 ### Próximos pasos candidatos
 
 - **Ensemble ponderado** por inverso del MAPE histórico de cada modelo (en lugar de media simple); puede arañar 0.1-0.3 pp.
-- **TBATS proper** (`python src/modelos_diarios.py --tbats`): correr con Box-Cox + ARMA errors y comparar.
+- ~~TBATS proper~~ — hecho (2026-05-18): descartado, ver Hallazgos.
 - **Tuning de LightGBM**: grid search sobre `num_leaves`, `learning_rate`, `n_estimators` con CV expanding interno.
 - **Intervención COVID más rica**: en lugar de un dummy binario lockdown, modelar también el "post-lockdown" con efecto que decae (~3 meses) o usar variables de movilidad si hay disponibles.
 - **Modelo jerárquico**: usar las 15 CCAA + reconciliación (MinT/OLS) para predicción peninsular como suma.
-- **Hiperparámetro días/años de train sliding**: probar TBATS y LightGBM con 5 años de sliding en lugar de expanding desde 2015 (igual ayuda a mitigar el cambio de régimen FV).
+- **Hiperparámetro días/años de train sliding**: probar LightGBM con 5 años de sliding en lugar de expanding desde 2015 (igual ayuda a mitigar el cambio de régimen FV).
 
 ### Archivos generados / modificados
 

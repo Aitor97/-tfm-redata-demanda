@@ -1,6 +1,6 @@
 # Modelos diarios con doble estacionalidad - rolling expanding
 
-**Fecha**: 2026-05-10 20:16
+**Fecha**: 2026-05-18 23:42
 
 ## Diseno
 
@@ -17,6 +17,7 @@
 | naive_semanal |       3.9671 |     1.569  |     2.2242 |     6.9167 |
 | naive_trend   |       4.6212 |     1.4    |     2.9892 |     6.5088 |
 | sarimax_d     |       5.499  |     1.6182 |     3.3842 |     7.8611 |
+| tbats_proper  |       9.2336 |     3.7794 |     4.1168 |    14.7066 |
 
 ## MAPE ANUAL (sum de los 365 dias real vs pred, MAPE entre los 6 anos)
 
@@ -28,6 +29,7 @@
 | lightgbm      |             3.2661 |           2.1076 |
 | naive_trend   |             4.1057 |           1.6379 |
 | sarimax_d     |             4.9689 |           1.7661 |
+| tbats_proper  |             8.1806 |           5.2411 |
 
 **Referencia baseline mensual SARIMAX -> anual**: 2.9168 % +/- 1.9673
 
@@ -71,6 +73,12 @@
 | sarimax_d     |       2023 |     7.8611 |
 | sarimax_d     |       2024 |     3.3842 |
 | sarimax_d     |       2025 |     6.2528 |
+| tbats_proper  |       2020 |     8.5823 |
+| tbats_proper  |       2021 |     7.6488 |
+| tbats_proper  |       2022 |    14.7066 |
+| tbats_proper  |       2023 |    12.4736 |
+| tbats_proper  |       2024 |     4.1168 |
+| tbats_proper  |       2025 |     7.8732 |
 
 ## Baseline mensual (referencia)
 
