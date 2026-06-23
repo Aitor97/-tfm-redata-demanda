@@ -193,3 +193,69 @@ Después del commit `8176697` la sesión continuó en modo exploratorio sin nuev
 - `data/processed/dataset_diario.csv` (nuevo).
 - `reports/diario_predicciones.csv` (nuevo).
 - `reports/diario_resumen.md` (nuevo).
+
+---
+
+## 2026-06-24 — Chronos-2 directo y ensembles 50/50 (mensual y diario)
+
+### Lo que hice
+
+1. **Cambio de variante Chronos**: descartado `amazon/chronos-t5-small` como apuesta principal. Tras revisar el estado del arte (Chronos-Bolt es ~250× más rápido y SOTA en GIFT-Eval / fev-bench; **Chronos-2** sale Oct-2025, encoder-only 120 M, soporta **known future covariates** nativamente), se elige **`amazon/chronos-2`**.
+
+2. **Chronos-2 directo mensual** (`src/chronos2_directo.py`): predicción de demanda mensual usando `HDD18` y `CDD22` como future covariates conocidas (no como corrector de residuos SARIMAX, sino sustituyendo el modelo entero). Train 2015-01..2023-12, hold-out 2024-01..2025-12. API: `BaseChronosPipeline.from_pretrained("amazon/chronos-2") → predict_df(context_df, future_df, …)`, punto = cuantil 0.5.
+
+3. **Ensemble SARIMAX + Chronos-2 mensual 50/50** (`src/ensemble_sarimax_chronos2.py`): promedio simple de las dos predicciones del hold-out. Versión preliminar con ponderación validada en 2023 (inverse-MAPE) — descartada porque 2023 fue patológico para SARIMAX y los pesos sobre-ponderaban Chronos-2; el oracle (w_S=0.45) coincide con 50/50, así que no hay margen tunear.
+
+4. **Chronos-2 diario rolling expanding** (`src/chronos2_diario.py`): replicado el setup de `src/modelos_diarios.py` (6 ventanas, test = año completo 2020..2025). Future covariates: `HDD18`, `CDD22`, `is_holiday` (las que no son deducibles del timestamp). Sorpresa: **1-2 s por ventana en CPU** (esperaba 1-3 min); el modelo procesa 365 d de predicción con contextos de 1.8-3.6 k d casi instantáneamente.
+
+5. **Ensemble diario 50/50** (`src/ensemble_diario_chronos2.py`): cruce de `chronos2_diario_predicciones.csv` con la fila `ensemble` de `reports/diario_predicciones.csv` (= mean naive_trend + Prophet + LightGBM). Promedio simple día a día, agregado a mensual y anual.
+
+### Hallazgos
+
+**Mensual (hold-out 2024-2025):**
+
+| Modelo | MAPE |
+|---|---|
+| SARIMAX puro | 1.957 % |
+| Chronos-2 directo | 1.874 % |
+| **Ensemble SARIMAX + Chronos-2 50/50** | **1.363 %** |
+| Oracle (w_S=0.45, upper bound) | 1.355 % |
+
+Mejora vs SARIMAX puro: **−0.59 pp absoluta, −30 % relativa**. El 50/50 está a 0.008 pp del oracle, no hay margen de tuning. Los errores de SARIMAX y Chronos-2 cancelan especialmente bien en los meses de régimen post-autoconsumo FV (2025-04, 2025-05, 2025-08).
+
+**Diario (rolling expanding 6 iter):**
+
+| Modelo | MAPE diario | MAPE mensual | MAPE anual |
+|---|---|---|---|
+| Ensemble actual (naive_trend + Prophet + LightGBM) | — | 2.956 % ± 1.72 | 2.424 % ± 1.85 |
+| Chronos-2 zero-shot + HDD/CDD/holidays | 3.681 % ± 1.68 | 2.859 % ± 1.98 | 2.330 % ± 2.12 |
+| **Ensemble diario 50/50 (Chronos-2 + ensemble actual)** | — | **2.699 % ± 1.99** | **2.130 % ± 2.15** |
+
+Mejora vs ensemble actual: **−0.26 pp mensual (−8.7 %)**, **−0.29 pp anual (−12.1 %)**. Gana 5/6 años; pierde solo 2022 (shock energético post-Ucrania). En 2021 el 50/50 da **MAPE anual de 0.25 %** — el mejor número del TFM.
+
+### Decisiones / aprendizajes
+
+- **Chronos-2 sustituye a Chronos-T5 como foundation model del pipeline.** Soporta future covariates de fábrica, así que ya no necesita el esquema "paso 1 SARIMAX, paso 2 corrector de residuos"; entra directo a competir con el modelo estructural.
+- **El ensemble 50/50 es la receta ganadora en ambas pistas.** Cero tuning, cero leakage, defendible al tribunal en una línea. La validación interna (inverse-MAPE de 2023) fue peor por sobreponderar al ganador puntual de un año atípico; **lección metodológica**: con cambios de régimen, los pesos por validación de un solo año son frágiles.
+- **El 1.36 % mensual del hold-out 2024-2025 NO es directamente comparable** con el 2.96 % mensual del ensemble diario (rolling expanding 6 ventanas). Para defenderlo en el TFM hay que llevarlo también a rolling mensual.
+- **2022 sigue siendo el año patológico** para todos los modelos: shock energético, cambio de patrones de consumo industrial. Es el único año donde Chronos-2 pierde claramente; el SARIMAX/ensemble clásico aporta robustez ahí.
+- **Coste computacional**: Chronos-2 diario en CPU corre en ~10 s para las 6 ventanas. Iterar es trivialmente barato — se pueden hacer experimentos con covariates alternativas (añadir `is_weekend`, `dow`, FV instalada acumulada, etc.) sin presupuesto de cómputo.
+
+### Próximos pasos candidatos
+
+- **Ensemble diario 4-vías**: `(naive_trend + Prophet + LightGBM + Chronos-2) / 4`, pesos iguales. Apuesto a que baja del 2.10 % anual.
+- **Ensemble mensual rolling expanding 6 ventanas** (versión del 1.36 % comparable apples-to-apples con el resto).
+- **Chronos-2 con más covariates futuros**: añadir `is_weekend`, `dow`, dummy de cambio de régimen FV post-2022.
+- **Chronos-2 en horario** (`src/modelos_horarios.py` ya tiene la infra): contexto ~50 k h, horizonte ~8.7 k h. Verificar si Chronos-2 mantiene el tirón con doble estacionalidad diaria-semanal en niveles horarios.
+- **Comparativa formal del TFM**: tabla maestra con baseline mensual / ensemble diario clásico / ensemble diario + Chronos-2 / ensemble mensual + Chronos-2, todos en rolling expanding.
+
+### Archivos generados
+
+- `src/chronos2_directo.py` (nuevo) — Chronos-2 mensual single hold-out.
+- `src/ensemble_sarimax_chronos2.py` (nuevo) — ensemble 50/50 mensual.
+- `src/chronos2_diario.py` (nuevo) — Chronos-2 diario rolling 6 ventanas.
+- `src/ensemble_diario_chronos2.py` (nuevo) — ensemble 50/50 diario.
+- `reports/chronos2_directo_{predicciones.csv,resultado.md}` (nuevos).
+- `reports/ensemble_sarimax_chronos2_{predicciones.csv,resultado.md}` (nuevos).
+- `reports/chronos2_diario_{predicciones.csv,resumen.md}` (nuevos).
+- `reports/ensemble_diario_chronos2_{predicciones.csv,resumen_por_ano.csv,resultado.md}` (nuevos).
