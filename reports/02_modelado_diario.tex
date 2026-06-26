@@ -10,6 +10,7 @@
 \usepackage{xcolor}
 \usepackage{caption}
 \usepackage{float}
+\usepackage{listings}
 
 \geometry{margin=2.5cm}
 
@@ -18,6 +19,37 @@
   linkcolor=blue!60!black,
   urlcolor=blue!60!black,
 }
+
+% --- listings style ---
+\definecolor{codebg}{RGB}{248,248,248}
+\definecolor{codeframe}{RGB}{200,200,200}
+\definecolor{kwcolor}{RGB}{0,0,180}
+\definecolor{strcolor}{RGB}{163,21,21}
+\definecolor{cmtcolor}{RGB}{106,153,85}
+\definecolor{numcolor}{RGB}{9,134,88}
+
+\lstdefinestyle{python}{
+  language=Python,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeframe},
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{kwcolor}\bfseries,
+  stringstyle=\color{strcolor},
+  commentstyle=\color{cmtcolor}\itshape,
+  numberstyle=\tiny\color{gray},
+  numbers=left,
+  numbersep=8pt,
+  breaklines=true,
+  breakatwhitespace=true,
+  showstringspaces=false,
+  tabsize=4,
+  captionpos=b,
+  aboveskip=6pt,
+  belowskip=6pt,
+}
+
+\lstset{style=python}
 
 \title{\textbf{02 --- Modelado diario}\\
   \large SARIMAX / Prophet / LightGBM / Chronos-2 / Ensembles}
@@ -49,6 +81,30 @@ mensual (suma por mes) y anual (suma por año).
 SARIMAX (2{,}92\,\% anual).
 
 % -----------------------------------------------------------------------
+\section{Carga de datos}
+
+\begin{lstlisting}[caption={Importaciones y carga de predicciones base}]
+from pathlib import Path
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+sns.set_theme(style='whitegrid', context='notebook')
+plt.rcParams['figure.dpi'] = 100
+
+ROOT = Path.cwd().parent if Path.cwd().name == 'notebooks' else Path.cwd()
+REPORTS = ROOT / 'reports'
+
+# Predicciones de los 7 modelos diarios base (long format)
+PRED = pd.read_csv(REPORTS / 'diario_predicciones.csv', parse_dates=['fecha'])
+print('Modelos base:', sorted(PRED['modelo'].unique()))
+print('Anios test:', sorted(PRED['ano_test'].unique()))
+print('Filas:', len(PRED))
+PRED.head()
+\end{lstlisting}
+
+% -----------------------------------------------------------------------
 \section{Modelos evaluados}
 
 Siete modelos compiten en la pista diaria:
@@ -77,8 +133,48 @@ A esto se añade el \textbf{Chronos-2 zero-shot} y el \textbf{ensemble
 y~\ref{sec:ensemble50}).
 
 % -----------------------------------------------------------------------
+\section{Función de métricas y cálculo por iteración}
+
+\begin{lstlisting}[caption={Función MAPE y cálculo de métricas por modelo y ventana}]
+def mape(y, yhat):
+    y, yhat = np.asarray(y), np.asarray(yhat)
+    mask = y != 0
+    return float(np.mean(np.abs((y[mask] - yhat[mask]) / y[mask])) * 100)
+
+def metricas_por_iter(df_pred):
+    rows = []
+    for (modelo, ano), g in df_pred.groupby(['modelo', 'ano_test']):
+        # diario
+        mape_d = mape(g['real'], g['pred'])
+        # mensual
+        g_m = g.set_index('fecha').resample('MS').agg(
+            real=('real', 'sum'), pred=('pred', 'sum'))
+        mape_m = mape(g_m['real'], g_m['pred'])
+        # anual
+        mape_a = mape([g['real'].sum()], [g['pred'].sum()])
+        rows.append({'modelo': modelo, 'ano_test': ano,
+                     'MAPE_diario': mape_d,
+                     'MAPE_mensual': mape_m,
+                     'MAPE_anual': mape_a})
+    return pd.DataFrame(rows)
+
+metricas = metricas_por_iter(PRED)
+metricas.round(2).head(10)
+\end{lstlisting}
+
+% -----------------------------------------------------------------------
 \section{Resumen por modelo (media de las 6 iteraciones)}
 \label{sec:resumen}
+
+\begin{lstlisting}[caption={Resumen agregado por modelo}]
+resumen = (
+    metricas.groupby('modelo')[['MAPE_diario','MAPE_mensual','MAPE_anual']]
+        .agg(['mean','std'])
+        .round(3)
+)
+resumen.columns = ['_'.join(c) for c in resumen.columns]
+resumen.sort_values('MAPE_anual_mean')
+\end{lstlisting}
 
 \begin{table}[H]
 \centering
@@ -103,9 +199,16 @@ Modelo
 \end{tabular}
 \end{table}
 
-\noindent
-Comparativa con la referencia mensual
-(\texttt{SARIMAX(0,1,2)(1,1,1,12) + HDD/CDD}):
+\begin{lstlisting}[caption={Referencia: SARIMAX mensual baseline}]
+ref_mensual = pd.DataFrame({
+    'MAPE_mensual_mean': [3.65, np.nan],
+    'MAPE_mensual_std':  [1.66, np.nan],
+    'MAPE_anual_mean':   [2.92, 1.96],
+    'MAPE_anual_std':    [1.97, np.nan],
+}, index=['SARIMAX mensual (rolling 6 iter)',
+          'SARIMAX mensual (hold-out 2024-25)'])
+ref_mensual.round(2)
+\end{lstlisting}
 
 \begin{table}[H]
 \centering
@@ -123,6 +226,22 @@ SARIMAX mensual (hold-out 2024--25)  & ---    & ---    & 1{,}96 & ---    \\
 % -----------------------------------------------------------------------
 \section{CV walk-forward: detalle por año}
 \label{sec:cv}
+
+\begin{lstlisting}[caption={Pivot de MAPE mensual y anual por modelo y año}]
+# Pivot: filas = modelo, columnas = ano_test, valores = MAPE_mensual
+piv_m = metricas.pivot(index='modelo', columns='ano_test',
+                        values='MAPE_mensual').round(2)
+piv_m['media']    = piv_m.mean(axis=1).round(2)
+piv_m['sin_2020'] = piv_m.drop(columns=[2020, 'media']).mean(axis=1).round(2)
+piv_m.sort_values('media')
+
+# Mismo pivot a granularidad anual
+piv_a = metricas.pivot(index='modelo', columns='ano_test',
+                        values='MAPE_anual').round(2)
+piv_a['media']    = piv_a.mean(axis=1).round(2)
+piv_a['sin_2020'] = piv_a.drop(columns=[2020, 'media']).mean(axis=1).round(2)
+piv_a.sort_values('media')
+\end{lstlisting}
 
 \subsection*{MAPE mensual (\%) por modelo y año de test}
 
@@ -165,6 +284,43 @@ Modelo & 2020 & 2021 & 2022 & 2023 & 2024 & 2025 & media & sin 2020 \\
 \end{table}
 
 % -----------------------------------------------------------------------
+\section{Visualización: MAPE por modelo y año}
+
+Boxplot agregando las 6 ventanas, ordenado por mediana.
+
+\begin{lstlisting}[caption={Boxplots de MAPE mensual y anual por modelo}]
+orden = (metricas.groupby('modelo')['MAPE_mensual']
+                 .median().sort_values().index.tolist())
+
+fig, axes = plt.subplots(1, 2, figsize=(15, 4.5))
+sns.boxplot(data=metricas, x='modelo', y='MAPE_mensual', order=orden,
+            ax=axes[0], color='lightsteelblue')
+axes[0].set_title('MAPE mensual por modelo (6 iter)')
+axes[0].tick_params(axis='x', rotation=30)
+axes[0].axhline(3.65, color='red', linestyle='--', alpha=0.6,
+                label='SARIMAX mensual (3.65 %)')
+axes[0].legend()
+
+sns.boxplot(data=metricas, x='modelo', y='MAPE_anual', order=orden,
+            ax=axes[1], color='lightsteelblue')
+axes[1].set_title('MAPE anual por modelo (6 iter)')
+axes[1].tick_params(axis='x', rotation=30)
+axes[1].axhline(2.92, color='red', linestyle='--', alpha=0.6,
+                label='SARIMAX mensual (2.92 %)')
+axes[1].legend()
+plt.tight_layout()
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Heatmap de MAPE mensual por modelo y año}]
+fig, ax = plt.subplots(figsize=(11, 4.5))
+sns.heatmap(piv_m.drop(columns=['media','sin_2020']).loc[orden],
+            annot=True, fmt='.2f', cmap='RdYlGn_r',
+            center=4, ax=ax, cbar=False)
+ax.set_title('MAPE mensual (%) por modelo y anio de test')
+plt.tight_layout()
+\end{lstlisting}
+
+% -----------------------------------------------------------------------
 \section{Chronos-2 zero-shot diario}
 \label{sec:chronos}
 
@@ -172,6 +328,18 @@ Modelo fundacional \texttt{amazon/chronos-2} (120\,M parámetros,
 encoder-only) con \texttt{HDD18}, \texttt{CDD22} e \texttt{is\_holiday}
 como \emph{future covariates}. Mismas 6~ventanas. Cuantil mediano
 ($q=0{,}5$).
+
+\begin{lstlisting}[caption={Carga y evaluación de Chronos-2}]
+CHRONOS = pd.read_csv(REPORTS / 'chronos2_diario_predicciones.csv',
+                      parse_dates=['fecha'])
+m_chronos = metricas_por_iter(CHRONOS).set_index('ano_test')
+m_chronos[['MAPE_diario','MAPE_mensual','MAPE_anual']].round(2)
+
+# Resumen global Chronos-2
+res_chronos = (m_chronos[['MAPE_diario','MAPE_mensual','MAPE_anual']]
+               .mean().to_frame('Chronos-2').T)
+res_chronos.round(3)
+\end{lstlisting}
 
 \begin{table}[H]
 \centering
@@ -200,6 +368,27 @@ El modelo entregable de la pista diaria. Promedio simple sin tuning entre
 el \texttt{ensemble} (naive\_trend + Prophet + LightGBM) y Chronos-2
 zero-shot.
 
+\begin{lstlisting}[caption={Carga del ensemble 50/50 y cálculo de métricas}]
+ENS = pd.read_csv(REPORTS / 'ensemble_diario_chronos2_predicciones.csv',
+                  parse_dates=['fecha'])
+
+# Metricas del ensemble 50/50 por anio
+filas = []
+for ano, g in ENS.groupby('ano_test'):
+    mape_d = mape(g['real'], g['pred_50_50'])
+    g_m = g.set_index('fecha').resample('MS').agg(
+        real=('real', 'sum'), pred=('pred_50_50', 'sum'))
+    mape_m = mape(g_m['real'], g_m['pred'])
+    mape_a = mape([g['real'].sum()], [g['pred_50_50'].sum()])
+    filas.append({'ano_test': ano,
+                  'MAPE_diario': mape_d,
+                  'MAPE_mensual': mape_m,
+                  'MAPE_anual': mape_a})
+
+m_ens = pd.DataFrame(filas).set_index('ano_test')
+m_ens.round(2)
+\end{lstlisting}
+
 \begin{table}[H]
 \centering
 \caption{MAPE del ensemble 50/50 por año de test}
@@ -218,6 +407,68 @@ Año test & MAPE diario (\%) & MAPE mensual (\%) & MAPE anual (\%) \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\begin{lstlisting}[caption={Resumen comparativo: ensemble base, Chronos-2 y ensemble 50/50}]
+resumen_final = pd.DataFrame({
+    'Ensemble base (naive+Prophet+LGBM)':
+        metricas.query("modelo == 'ensemble'")[
+            ['MAPE_diario','MAPE_mensual','MAPE_anual']].mean(),
+    'Chronos-2 zero-shot':
+        m_chronos[['MAPE_diario','MAPE_mensual','MAPE_anual']].mean(),
+    'Ensemble 50/50 (FINAL)':
+        m_ens[['MAPE_diario','MAPE_mensual','MAPE_anual']].mean(),
+}).T.round(3)
+resumen_final
+\end{lstlisting}
+
+% -----------------------------------------------------------------------
+\section{Visualización del ganador}
+
+Predicción del ensemble 50/50 frente al real, agregado a mensual, para
+las 6~ventanas.
+
+\begin{lstlisting}[caption={Serie mensual: real vs.\ ensemble 50/50}]
+ens_mes = (
+    ENS.set_index('fecha')
+       .groupby('ano_test')[['real','pred_50_50']]
+       .resample('MS').sum()
+       .reset_index()
+)
+
+fig, ax = plt.subplots(figsize=(13, 4.5))
+for ano, g in ens_mes.groupby('ano_test'):
+    ax.plot(g['fecha'], g['real']/1e6, color='black', linewidth=1)
+    ax.plot(g['fecha'], g['pred_50_50']/1e6,
+            color='steelblue', linewidth=1, alpha=0.8)
+ax.set_title('Ensemble 50/50 diario -> mensual: real (negro) vs pred (azul)')
+ax.set_ylabel('TWh/mes')
+plt.tight_layout()
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Demanda anual real vs.\ predicha + gráfico de barras}]
+# Tabla de error anual
+anual = (
+    ENS.assign(anio=ENS['fecha'].dt.year)
+       .groupby('anio').agg(
+           real_TWh=('real',     lambda x: x.sum()/1e6),
+           pred_TWh=('pred_50_50', lambda x: x.sum()/1e6))
+)
+anual['error_%'] = (anual['pred_TWh'] - anual['real_TWh']) / anual['real_TWh'] * 100
+anual.round(3)
+
+# Grafico de barras
+fig, ax = plt.subplots(figsize=(9, 4.5))
+x = np.arange(len(anual))
+w = 0.4
+ax.bar(x - w/2, anual['real_TWh'], width=w, label='Real', color='black')
+ax.bar(x + w/2, anual['pred_TWh'], width=w,
+       label='Pred (ensemble 50/50)', color='steelblue')
+ax.set_xticks(x); ax.set_xticklabels(anual.index)
+ax.set_ylabel('TWh/anio')
+ax.set_title('Demanda anual: real vs ensemble 50/50 diario')
+ax.legend()
+plt.tight_layout()
+\end{lstlisting}
 
 \subsection*{Demanda anual: real vs.\ ensemble 50/50}
 
@@ -240,6 +491,21 @@ Año & Real (TWh) & Pred (TWh) & Error (\%) \\
 
 % -----------------------------------------------------------------------
 \section{Comparativa final: pista diaria vs.\ baseline mensual}
+
+\begin{lstlisting}[caption={Tabla comparativa global de todos los modelos}]
+tabla_final = pd.DataFrame({
+    'modelo': ['SARIMAX mensual (baseline)',
+               'SARIMAX mensual (hold-out 2024-25)',
+               'Ensemble base diario',
+               'Chronos-2 diario',
+               'Ensemble 50/50 diario (FINAL)'],
+    'MAPE_mensual_%': [3.65, np.nan, 2.96, 2.86,
+                       m_ens['MAPE_mensual'].mean()],
+    'MAPE_anual_%':   [2.92, 1.96, 2.42, 2.33,
+                       m_ens['MAPE_anual'].mean()],
+}).round(2)
+tabla_final
+\end{lstlisting}
 
 \begin{table}[H]
 \centering
