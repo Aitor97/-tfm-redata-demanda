@@ -1,0 +1,298 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish]{babel}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{caption}
+\usepackage{float}
+
+\geometry{margin=2.5cm}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!60!black,
+  urlcolor=blue!60!black,
+}
+
+\title{\textbf{02 --- Modelado diario}\\
+  \large SARIMAX / Prophet / LightGBM / Chronos-2 / Ensembles}
+\author{TFM --- Pista diaria}
+\date{}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\vspace{1em}
+
+\noindent
+Pista \textbf{diaria} del TFM. Resultados producidos por los scripts
+\texttt{src/modelos\_diarios.py}, \texttt{src/chronos2\_diario.py} y
+\texttt{src/ensemble\_diario\_chronos2.py}; este documento los recoge,
+evalúa y compara, en paralelo al notebook mensual.
+
+\medskip
+\noindent
+\textbf{Diseño de validación:} rolling expanding, 6~ventanas, años de
+test 2020--2025. Train acumulativo desde 2015-01-01. Cada modelo predice
+los 365~días del año de test y se reporta el MAPE a granularidad diaria,
+mensual (suma por mes) y anual (suma por año).
+
+\medskip
+\noindent
+\textbf{Métrica principal:} MAPE anual, comparable con el baseline mensual
+SARIMAX (2{,}92\,\% anual).
+
+% -----------------------------------------------------------------------
+\section{Modelos evaluados}
+
+Siete modelos compiten en la pista diaria:
+
+\begin{table}[H]
+\centering
+\caption{Modelos de la pista diaria}
+\begin{tabular}{llll}
+\toprule
+Modelo & Tipo & Exógenas & Notas \\
+\midrule
+\texttt{naive\_trend}    & benchmark         & ---                              & lineal sobre tendencia anual \\
+\texttt{naive\_semanal}  & benchmark         & ---                              & repite la semana del año previo \\
+\texttt{sarimax\_d}      & clásico           & HDD18, CDD22, is\_holiday        & SARIMAX $(p,1,q)(P,1,Q)_7$ \\
+\texttt{prophet}         & descomposición    & HDD18, CDD22, is\_holiday        & doble estacionalidad nativa \\
+\texttt{lightgbm}        & ML tabular        & lags + calendario + temp         & features de lag 1--14, 365 \\
+\texttt{tbats\_proper}   & doble estacional  & ---                              & BATS con $T=(7,\,365{,}25)$ \\
+\texttt{ensemble}        & combinación       & ---                              & media simple naive\_trend + Prophet + LightGBM \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent
+A esto se añade el \textbf{Chronos-2 zero-shot} y el \textbf{ensemble
+50/50} que cierra la pista (véanse secciones~\ref{sec:chronos}
+y~\ref{sec:ensemble50}).
+
+% -----------------------------------------------------------------------
+\section{Resumen por modelo (media de las 6 iteraciones)}
+\label{sec:resumen}
+
+\begin{table}[H]
+\centering
+\caption{MAPE medio y desviación estándar por modelo (6 ventanas rolling)}
+\begin{tabular}{lrrrrrr}
+\toprule
+Modelo
+  & \multicolumn{2}{c}{MAPE diario (\%)}
+  & \multicolumn{2}{c}{MAPE mensual (\%)}
+  & \multicolumn{2}{c}{MAPE anual (\%)} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}
+  & media & std & media & std & media & std \\
+\midrule
+\texttt{ensemble}       & 3{,}886 & 1{,}432 & 2{,}956 & 1{,}719 & 2{,}424 & 1{,}854 \\
+\texttt{naive\_semanal} & 5{,}892 & 1{,}094 & 3{,}967 & 1{,}569 & 2{,}754 & 1{,}876 \\
+\texttt{prophet}        & 4{,}030 & 1{,}191 & 3{,}366 & 1{,}345 & 3{,}059 & 1{,}496 \\
+\texttt{lightgbm}       & 4{,}405 & 1{,}557 & 3{,}705 & 1{,}873 & 3{,}266 & 2{,}108 \\
+\texttt{naive\_trend}   & 6{,}340 & 0{,}896 & 4{,}621 & 1{,}400 & 4{,}106 & 1{,}638 \\
+\texttt{sarimax\_d}     & 6{,}622 & 1{,}387 & 5{,}499 & 1{,}618 & 4{,}969 & 1{,}766 \\
+\texttt{tbats\_proper}  & 9{,}792 & 3{,}438 & 9{,}234 & 3{,}779 & 8{,}181 & 5{,}241 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent
+Comparativa con la referencia mensual
+(\texttt{SARIMAX(0,1,2)(1,1,1,12) + HDD/CDD}):
+
+\begin{table}[H]
+\centering
+\caption{Referencia: SARIMAX mensual}
+\begin{tabular}{lrrrr}
+\toprule
+& MAPE mensual & std mensual & MAPE anual & std anual \\
+\midrule
+SARIMAX mensual (rolling 6 iter)     & 3{,}65 & 1{,}66 & 2{,}92 & 1{,}97 \\
+SARIMAX mensual (hold-out 2024--25)  & ---    & ---    & 1{,}96 & ---    \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% -----------------------------------------------------------------------
+\section{CV walk-forward: detalle por año}
+\label{sec:cv}
+
+\subsection*{MAPE mensual (\%) por modelo y año de test}
+
+\begin{table}[H]
+\centering
+\caption{MAPE mensual (\%) por modelo y año de test (ordenado por media)}
+\begin{tabular}{lrrrrrrrr}
+\toprule
+Modelo & 2020 & 2021 & 2022 & 2023 & 2024 & 2025 & media & sin 2020 \\
+\midrule
+\texttt{ensemble}       & 6{,}17 & 2{,}02 &  3{,}63 &  2{,}22 & 1{,}60 & 2{,}09 & 2{,}96 & 2{,}31 \\
+\texttt{prophet}        & 5{,}69 & 3{,}66 &  3{,}64 &  2{,}62 & 2{,}86 & 1{,}72 & 3{,}36 & 2{,}90 \\
+\texttt{lightgbm}       & 6{,}69 & 2{,}81 &  4{,}82 &  4{,}06 & 2{,}18 & 1{,}67 & 3{,}70 & 3{,}11 \\
+\texttt{naive\_semanal} & 6{,}92 & 3{,}71 &  3{,}56 &  4{,}01 & 2{,}22 & 3{,}39 & 3{,}97 & 3{,}38 \\
+\texttt{naive\_trend}   & 6{,}51 & 5{,}23 &  3{,}46 &  5{,}73 & 3{,}82 & 2{,}99 & 4{,}62 & 4{,}25 \\
+\texttt{sarimax\_d}     & 6{,}35 & 4{,}71 &  4{,}44 &  7{,}86 & 3{,}38 & 6{,}25 & 5{,}50 & 5{,}33 \\
+\texttt{tbats\_proper}  & 8{,}58 & 7{,}65 & 14{,}71 & 12{,}47 & 4{,}12 & 7{,}87 & 9{,}23 & 9{,}36 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection*{MAPE anual (\%) por modelo y año de test}
+
+\begin{table}[H]
+\centering
+\caption{MAPE anual (\%) por modelo y año de test (ordenado por media)}
+\begin{tabular}{lrrrrrrrr}
+\toprule
+Modelo & 2020 & 2021 & 2022 & 2023 & 2024 & 2025 & media & sin 2020 \\
+\midrule
+\texttt{ensemble}       & 5{,}66 & 1{,}99 &  3{,}52 &  1{,}51 & 0{,}79 & 1{,}08 & 2{,}42 & 1{,}78 \\
+\texttt{naive\_semanal} & 6{,}13 & 2{,}80 &  2{,}40 &  1{,}53 & 0{,}64 & 3{,}03 & 2{,}76 & 2{,}08 \\
+\texttt{prophet}        & 5{,}09 & 3{,}68 &  3{,}57 &  2{,}54 & 2{,}88 & 0{,}59 & 3{,}06 & 2{,}65 \\
+\texttt{lightgbm}       & 6{,}24 & 2{,}82 &  4{,}73 &  3{,}78 & 1{,}58 & 0{,}45 & 3{,}27 & 2{,}67 \\
+\texttt{naive\_trend}   & 5{,}65 & 5{,}10 &  2{,}25 &  5{,}77 & 3{,}66 & 2{,}21 & 4{,}11 & 3{,}80 \\
+\texttt{sarimax\_d}     & 3{,}50 & 4{,}80 &  4{,}16 &  7{,}94 & 3{,}33 & 6{,}08 & 4{,}97 & 5{,}26 \\
+\texttt{tbats\_proper}  & 6{,}70 & 7{,}36 & 15{,}04 & 12{,}69 & 0{,}05 & 7{,}25 & 8{,}18 & 8{,}48 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% -----------------------------------------------------------------------
+\section{Chronos-2 zero-shot diario}
+\label{sec:chronos}
+
+Modelo fundacional \texttt{amazon/chronos-2} (120\,M parámetros,
+encoder-only) con \texttt{HDD18}, \texttt{CDD22} e \texttt{is\_holiday}
+como \emph{future covariates}. Mismas 6~ventanas. Cuantil mediano
+($q=0{,}5$).
+
+\begin{table}[H]
+\centering
+\caption{MAPE de Chronos-2 zero-shot por año de test}
+\begin{tabular}{lrrr}
+\toprule
+Año test & MAPE diario (\%) & MAPE mensual (\%) & MAPE anual (\%) \\
+\midrule
+2020 & 6{,}54 & 6{,}02 & 5{,}48 \\
+2021 & 2{,}29 & 1{,}72 & 1{,}48 \\
+2022 & 4{,}85 & 4{,}59 & 4{,}51 \\
+2023 & 2{,}99 & 1{,}80 & 1{,}37 \\
+2024 & 2{,}34 & 0{,}99 & 0{,}73 \\
+2025 & 3{,}07 & 2{,}04 & 0{,}42 \\
+\midrule
+\textbf{Media} & \textbf{3{,}681} & \textbf{2{,}859} & \textbf{2{,}330} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% -----------------------------------------------------------------------
+\section{Ensemble final: $0{,}5 \times \text{ensemble} + 0{,}5 \times \text{Chronos-2}$}
+\label{sec:ensemble50}
+
+El modelo entregable de la pista diaria. Promedio simple sin tuning entre
+el \texttt{ensemble} (naive\_trend + Prophet + LightGBM) y Chronos-2
+zero-shot.
+
+\begin{table}[H]
+\centering
+\caption{MAPE del ensemble 50/50 por año de test}
+\begin{tabular}{lrrr}
+\toprule
+Año test & MAPE diario (\%) & MAPE mensual (\%) & MAPE anual (\%) \\
+\midrule
+2020 & 6{,}55 & 6{,}07 & 5{,}57 \\
+2021 & 1{,}99 & 1{,}13 & 0{,}25 \\
+2022 & 4{,}36 & 4{,}10 & 4{,}01 \\
+2023 & 2{,}86 & 1{,}73 & 1{,}44 \\
+2024 & 2{,}40 & 1{,}09 & 0{,}76 \\
+2025 & 2{,}86 & 2{,}06 & 0{,}75 \\
+\midrule
+\textbf{Media} & \textbf{3{,}503} & \textbf{2{,}699} & \textbf{2{,}129} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection*{Demanda anual: real vs.\ ensemble 50/50}
+
+\begin{table}[H]
+\centering
+\caption{Demanda anual (TWh) real vs.\ predicha por el ensemble 50/50}
+\begin{tabular}{lrrr}
+\toprule
+Año & Real (TWh) & Pred (TWh) & Error (\%) \\
+\midrule
+2020 & 250{,}051 & 263{,}973 & $+5{,}57$ \\
+2021 & 256{,}546 & 255{,}898 & $-0{,}25$ \\
+2022 & 250{,}471 & 260{,}518 & $+4{,}01$ \\
+2023 & 246{,}665 & 243{,}112 & $-1{,}44$ \\
+2024 & 249{,}000 & 250{,}883 & $+0{,}76$ \\
+2025 & 256{,}086 & 254{,}169 & $-0{,}75$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% -----------------------------------------------------------------------
+\section{Comparativa final: pista diaria vs.\ baseline mensual}
+
+\begin{table}[H]
+\centering
+\caption{Comparativa global de modelos}
+\begin{tabular}{lrr}
+\toprule
+Modelo & MAPE mensual (\%) & MAPE anual (\%) \\
+\midrule
+SARIMAX mensual (baseline)             & 3{,}65 & 2{,}92 \\
+SARIMAX mensual (hold-out 2024--25)    & ---    & 1{,}96 \\
+Ensemble base diario                   & 2{,}96 & 2{,}42 \\
+Chronos-2 diario                       & 2{,}86 & 2{,}33 \\
+\textbf{Ensemble 50/50 diario (FINAL)} & \textbf{2{,}70} & \textbf{2{,}13} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% -----------------------------------------------------------------------
+\section{Conclusiones de la pista diaria}
+
+\begin{enumerate}
+  \item \textbf{El ensemble 50/50 (ensemble base + Chronos-2) es el modelo
+        entregable de la pista diaria.} MAPE anual $\approx 2{,}1$\,\% en
+        rolling 6~iter, superando al baseline mensual SARIMAX (2{,}92\,\%)
+        y al propio Chronos-2 en solitario (2{,}33\,\%).
+
+  \item \textbf{Naive\_semanal aguanta sorprendentemente bien} como benchmark
+        (MAPE anual $\approx 2{,}75$\,\%), lo que señala que la estacionalidad
+        semanal es la información dominante en la granularidad diaria.
+
+  \item \textbf{TBATS no es competitivo a esta escala} (MAPE mensual
+        $\approx 9$\,\%), probablemente por el coste de ajustar dos
+        estacionalidades simultáneas sobre 365~días con poca historia.
+
+  \item \textbf{SARIMAX diario} (con $D=7$) no mejora al SARIMAX mensual
+        una vez agregado. El SARIMAX gana en granularidad mensual, donde
+        la estacionalidad anual domina; en diario la estacionalidad semanal
+        exige modelos más flexibles (LightGBM, Prophet, Chronos-2).
+
+  \item \textbf{2020 es el fold sucio} en todos los modelos; la columna
+        \texttt{sin\_2020} aísla el efecto COVID. Se recomienda reportarla
+        aparte en la memoria del TFM.
+
+  \item \textbf{El gap mensual $\to$ anual es positivo}: al agregar los
+        365~días, los errores diarios se compensan parcialmente. El ensemble
+        50/50 baja de $\approx 2{,}7$\,\% mensual a $\approx 2{,}1$\,\%
+        anual.
+\end{enumerate}
+
+\bigskip
+\noindent
+$\to$ La pista diaria queda cerrada con el ensemble 50/50 como modelo final.
+El siguiente paso natural es la \textbf{pista horaria} (modelos disponibles
+en \texttt{reports/horario\_*}) o la redacción de la memoria.
+
+\end{document}
